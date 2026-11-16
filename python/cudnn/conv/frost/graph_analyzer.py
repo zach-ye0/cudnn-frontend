@@ -5,8 +5,8 @@
 
 The analyzer deliberately separates graph matching from kernel compilation so
 new fusion patterns can be added without growing conditionals in the engine.
-Currently accepted patterns are a single convolution and a convolution whose
-output feeds one supported unary pointwise epilogue.
+Forward convolutions support the fusion patterns described by ``analyze_fprop``;
+weight gradients accept a single convolution with an identity epilogue.
 """
 
 from __future__ import annotations
@@ -81,6 +81,30 @@ class ConvGraph:
     epilogue_node: Optional[Node] = None
     block_scale_data: BlockScaleData | None = None
     output_quantize_data: OutputQuantizeData | None = None
+
+
+@dataclass(frozen=True)
+class WgradGraph:
+    """The materialized X, dY, and dW tensors for a weight-gradient graph."""
+
+    context: GraphContext
+    conv_node: Node
+    image: Tensor
+    loss: Tensor
+    weight: Tensor
+
+
+def analyze_wgrad(graph: pygraph) -> WgradGraph:
+    """Match the single-node weight-gradient graph without loading its kernel."""
+    if len(graph.nodes) != 1 or graph.nodes[0].node_type != NodeType.CONV_WGRAD:
+        raise NotImplementedError("frost_conv_wgrad requires a single CONV_WGRAD node with identity epilogue")
+    node = graph.nodes[0]
+    if set(node.inputs) != {"image", "loss"} or set(node.outputs) != {"DW"}:
+        raise NotImplementedError("frost_conv_wgrad requires image, loss, and DW ports")
+    tensors = (node.inputs["image"], node.inputs["loss"], node.outputs["DW"])
+    if any(t.is_virtual for t in tensors):
+        raise NotImplementedError("frost_conv_wgrad requires materialized X, dY and dW")
+    return WgradGraph(graph.context, node, *tensors)
 
 
 def _conv_operands(node: Node) -> tuple[Tensor, Tensor, Tensor]:
@@ -181,7 +205,7 @@ def _match_block_scale_quantize(graph: pygraph, tensor: Tensor) -> Optional[tupl
     return output_quantize_data, graph_output
 
 
-def analyze(graph: pygraph) -> ConvGraph:
+def analyze_fprop(graph: pygraph) -> ConvGraph:
     """Describe a structurally supported Frost convolution graph.
 
     The accepted graph grammar is one convolution, optionally followed by one
@@ -285,4 +309,4 @@ def analyze(graph: pygraph) -> ConvGraph:
     )
 
 
-__all__ = ["BlockScaleData", "ConvGraph", "OutputQuantizeData", "SUPPORTED_UNARY_EPILOGUES", "analyze"]
+__all__ = ["BlockScaleData", "ConvGraph", "OutputQuantizeData", "SUPPORTED_UNARY_EPILOGUES", "WgradGraph", "analyze_fprop", "analyze_wgrad"]

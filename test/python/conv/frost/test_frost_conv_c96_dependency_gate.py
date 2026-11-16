@@ -10,7 +10,7 @@ import pytest
 import torch
 
 from cudnn.conv.frost._cutedsl import DENSE_CUTEDSL_MIN_VERSION, requirement_error
-from cudnn.conv.frost.engine import FrostConvEngine
+from cudnn.conv.frost.fprop_engine import FrostConvEngine
 
 pytestmark = pytest.mark.L0
 

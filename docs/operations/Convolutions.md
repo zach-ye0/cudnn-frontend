@@ -199,3 +199,42 @@ dW.set_output(True).set_dim(list(W.get_dim())).set_stride(list(W.get_stride()))
 ```
 
 The symmetric-padding overload accepts `padding` in place of `pre_padding` and `post_padding`.
+
+### Experimental FROST weight gradient
+
+`frost_conv_wgrad` executes a single `graph.conv_wgrad(image=X, loss=dY, ...)`
+through the existing graph planning and execution API. Enable experimental
+engines with `CUDNN_FRONTEND_ENABLE_FROST_ENGINES=1`; this engine remains behind
+backend plans in automatic ranking. Select its plan explicitly when qualifying
+it. Forward convolution and weight gradients have separate engine families;
+`frost_conv_wgrad` owns slot 0 of the weight-gradient family (engine ID 21200).
+Public engine/knob records can be replayed with `create_execution_plan`.
+
+The initial implementation accepts:
+
+- SM100 or SM103 and CuTeDSL 4.9 or newer. SM100 has execution evidence;
+  SM103 and other compiler versions/flavors remain unverified.
+- BF16 X, dY and dW, with FP32 accumulation and identity epilogue. No fused
+  pointwise nodes, grouped convolution, or convolution-mode filter reversal.
+- Positive rank-5 compact channels-last tensors: logical NCDHW for X,
+  NKZPQ for dY, and KCTRS for dW. Declare dW dimensions and strides explicitly.
+- Zero padding and unit stride/dilation. Each filter extent is from 1 to 17,
+  with positive output dimensions. The rank-5 im2col corners are
+  `lower = -padding_before` and
+  `upper = padding_after - (filter_extent - 1) * dilation`, both in `[-16, 15]`.
+- C and K multiples of 128 and `L = N * Z * P * Q` divisible by 64. L is the
+  reduction length, distinct from output-channel count K. Runtime addresses
+  must be 16-byte aligned; descriptor and signed 32-bit scheduler bounds
+  are checked before compilation.
+
+The fixed public knobs are `TILE_M=128`, `TILE_N=128`, `TILEK=128` (bytes),
+`CTA_GROUP=1`, and `STAGES=3`. Each CTA reduces all L elements for one
+128-by-128 `(K, C)` tile and one filter position, with two accumulator stages
+and two output-store stages. The persistent kernel uses tiled dY TMA loads,
+im2col X TMA loads, MN-major MMA operands, and tiled dW TMA stores. Execution
+launches one kernel on the caller's stream, needs zero workspace bytes, and
+supports CUDA-graph capture.
+
+Tensor dimensions and filter geometry are runtime values. Supported shapes
+share one compiled artifact per device/target, dtype, pipeline configuration,
+and epilogue. Unsupported configurations decline before JIT compilation.

@@ -8,7 +8,7 @@ from contextlib import nullcontext
 import cudnn
 import pytest
 
-from cudnn.conv.frost.engine import FrostConvEngine
+from cudnn.conv.frost.fprop_engine import FrostConvEngine
 from utils import requires_block_scale_cutedsl, requires_dense_cutedsl, requires_sm100
 
 pytestmark = [pytest.mark.L0, requires_sm100]
